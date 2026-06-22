@@ -19,7 +19,7 @@ class ModelConfig:
     model_name: str = "gpt2"
 
     # TODO: 模型最大接受的 token 序列长度
-    max_length: int = 512
+    max_length: int = 256
 
     # TODO: 词表大小（通常从 tokenizer 自动读取，这里也可以显式写）
     vocab_size: Optional[int] = None
@@ -44,7 +44,7 @@ class RewardModelConfig:
     reward_epochs: int = 3
 
     # TODO: 奖励模型训练的 batch size
-    reward_batch_size: int = 8
+    reward_batch_size: int = 16
 
 
 @dataclass
@@ -114,6 +114,8 @@ class TrainingConfig:
     """
     通用训练配置（设备、路径、日志等）
     """
+    data_path: str = "Anthropic/hh-rlhf"
+    
     # TODO: 训练设备，"cuda" / "cpu" / "mps"（苹果芯片）
     device: str = "cuda"
 

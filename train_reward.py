@@ -74,14 +74,21 @@ def main():
         epoch_losses = []
         epoch_accs = []
 
-        # TODO: 遍历 train_loader
-        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
-        
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}")
+        for step, batch in enumerate(pbar):
             loss, accuracy = train_reward_model_step(
                 reward_model, optimizer, batch, device
             )
             epoch_losses.append(loss)
             epoch_accs.append(accuracy)
+
+            # 在进度条右侧实时显示
+            pbar.set_postfix({
+                "step": f"{step+1}/{len(train_loader)}",
+                "loss": f"{loss:.4f}",
+                "acc": f"{accuracy:.4f}",
+            })
+
 
         avg_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0
         avg_acc = sum(epoch_accs) / len(epoch_accs) if epoch_accs else 0

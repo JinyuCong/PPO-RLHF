@@ -238,7 +238,8 @@ def get_preference_dataloader(data: List[Dict], tokenizer, max_length: int,
       3. 返回 DataLoader
     """
     preference_ds = PreferenceDataset(data, tokenizer=tokenizer, max_length=max_length)
-    preference_dl = DataLoader(preference_ds, batch_size=batch_size, shuffle=shuffle)
+    preference_dl = DataLoader(preference_ds, batch_size=batch_size, shuffle=shuffle,
+                               num_workers=4, pin_memory=True)
     return preference_dl
 
 

@@ -12,15 +12,19 @@
 import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
+from transformers import AutoTokenizer
 from typing import Optional
+import datetime
 import os
+from tqdm import tqdm
+import itertools
 
 from config import Config
 from model import ActorModel, CriticModel, ReferenceModel, load_models
 from reward_model import RewardModel
 from data import get_prompt_dataloader, load_prompt_data
 from ppo_trainer import collect_rollouts, compute_advantages, ppo_update
-from utils import set_seed, save_checkpoint, load_checkpoint, get_logger
+from utils import set_seed, save_checkpoint, load_checkpoint, get_logger, masked_mean, compute_kl_divergence
 
 
 class RLHFTrainer:
@@ -56,23 +60,37 @@ class RLHFTrainer:
         self.device = config.training.device
 
         # TODO: 设置随机种子
+        set_seed(config.training.seed)
         # TODO: 加载 actor, critic, ref_model
-        self.actor: ActorModel = None
-        self.critic: CriticModel = None
-        self.ref_model: ReferenceModel = None
+        actor, critic, ref_model = load_models(config.model, device=self.device)
+        self.actor: ActorModel = actor
+        self.critic: CriticModel = critic
+        self.ref_model: ReferenceModel = ref_model
 
         # TODO: 加载奖励模型（从 checkpoint 加载，路径在 config.reward.reward_model_save_path）
-        self.reward_model: RewardModel = None
+        self.reward_model: RewardModel = RewardModel(config.reward).to(self.device)
+        rm_path = os.path.join(config.reward.reward_model_save_path, "reward_model.pt")
+        state_dict = torch.load(rm_path, map_location=self.device)
+        self.reward_model.load_state_dict(state_dict)
+        self.reward_model.eval()
 
         # TODO: 初始化优化器
-        self.actor_optimizer = None
-        self.critic_optimizer = None
+        self.actor_optimizer = torch.optim.AdamW(self.actor.parameters(), lr=config.ppo.actor_lr)
+        self.critic_optimizer = torch.optim.AdamW(self.critic.parameters(), lr=config.ppo.critic_lr)
 
         # TODO: 加载 prompt 数据集
-        self.prompt_dataloader = None
+        prompts = load_prompt_data(config.training.data_path)
+        tokenizer = AutoTokenizer.from_pretrained(config.model.model_name)
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = 'left'
+        self.prompt_dataloader = get_prompt_dataloader(prompts=prompts, 
+                                                       tokenizer=tokenizer, 
+                                                       max_length=config.model.max_length, 
+                                                       batch_size=8)
 
         # TODO: 初始化 TensorBoard writer
-        self.writer: Optional[SummaryWriter] = None
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.writer: Optional[SummaryWriter] = SummaryWriter(f"runs/{timestamp}")
 
         # 训练步数计数器
         self.global_step = 0
@@ -97,8 +115,20 @@ class RLHFTrainer:
           - 每次迭代后 self.global_step += 1
           - 用 tqdm 包装循环可以显示进度条
         """
-        raise NotImplementedError
-
+        data_iter = itertools.cycle(self.prompt_dataloader)
+        pbar = tqdm(total=self.config.ppo.total_steps, initial=self.global_step)
+        
+        while self.global_step < self.config.ppo.total_steps:
+            batch = next(data_iter)
+            metrics = self._rollout_and_update(batch)
+            self.log_metrics(metrics)
+            self.global_step += 1
+            pbar.update(1)
+            
+            # 定期保存
+            if self.global_step % self.config.training.save_steps == 0:
+                self.save()
+            
     def _rollout_and_update(self, batch):
         """
         一次完整的 rollout + 更新流程（主循环的核心）
@@ -112,7 +142,50 @@ class RLHFTrainer:
 
         TODO: 实现上述步骤
         """
-        raise NotImplementedError
+        input_ids = batch['input_ids'].to(self.device)
+        attention_mask = batch['attention_mask'].to(self.device)
+        
+        # 生成回复，收集数据
+        buffer = collect_rollouts(
+            actor=self.actor,
+            critic=self.critic,
+            ref_model=self.ref_model,
+            reward_model=self.reward_model,
+            prompt_ids=input_ids,
+            attention_mask=attention_mask,
+            config=self.config.ppo,
+            device=self.device
+        )
+        
+        # GAE 计算优势函数
+        buffer = compute_advantages(buffer=buffer, config=self.config.ppo)
+        
+        # 计算平均masked reward
+        rewards = buffer.rewards
+        prompt_len = buffer.prompt_ids.size(1)
+        response_mask = buffer.attention_mask[:, prompt_len:].to(rewards.dtype)
+        avg_reward = masked_mean(rewards, response_mask)
+        
+        old_log_probs = buffer.old_log_probs
+        ref_log_probs = buffer.ref_log_probs
+        
+        # 多轮更新 actor 和 critic
+        metrics = ppo_update(
+            actor=self.actor,
+            critic=self.critic,
+            actor_optimizer=self.actor_optimizer,
+            critic_optimizer=self.critic_optimizer,
+            buffer=buffer,
+            config=self.config.ppo
+        )
+        
+        kl = compute_kl_divergence(old_log_probs, ref_log_probs, response_mask)  # (B,)
+        avg_kl = kl.mean()
+        
+        metrics["reward/mean"] = avg_reward.item()
+        metrics["kl/mean"] = avg_kl.item()
+        
+        return metrics
 
     def log_metrics(self, metrics: dict):
         """
@@ -130,7 +203,13 @@ class RLHFTrainer:
           1. 用 self.writer.add_scalar(key, value, self.global_step) 写入 TensorBoard
           2. 每 log_steps 步打印一行到控制台
         """
-        raise NotImplementedError
+        for key, value in metrics.items():
+            self.writer.add_scalar(key, value, self.global_step)
+        
+        # 每 log_steps 步打印一行
+        if self.global_step % self.config.training.log_steps == 0:
+            msg = " | ".join(f"{k}={v:.4f}" for k, v in metrics.items())
+            print(f"[step {self.global_step}] {msg}")
 
     def save(self):
         """
@@ -147,7 +226,14 @@ class RLHFTrainer:
         提示：torch.save(state_dict, path)
               actor.model.save_pretrained(path) 可以保存为 HuggingFace 格式
         """
-        raise NotImplementedError
+        save_checkpoint(
+            save_dir=self.config.training.output_dir,
+            step=self.global_step,
+            actor=self.actor,
+            critic=self.critic,
+            actor_optimizer=self.actor_optimizer,
+            critic_optimizer=self.critic_optimizer,
+        )
 
     def load(self, checkpoint_path: str):
         """
@@ -155,4 +241,11 @@ class RLHFTrainer:
 
         TODO: 实现加载逻辑，注意恢复 global_step
         """
-        raise NotImplementedError
+        # load_checkpoint 会就地恢复 critic / 两个 optimizer / actor 权重，并返回步数
+        self.global_step = load_checkpoint(
+            load_dir=checkpoint_path,
+            actor=self.actor,
+            critic=self.critic,
+            actor_optimizer=self.actor_optimizer,
+            critic_optimizer=self.critic_optimizer,
+        )

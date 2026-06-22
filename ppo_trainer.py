@@ -20,12 +20,19 @@
 
 import torch
 import torch.nn.functional as F
+from torch.utils.data import TensorDataset, DataLoader
 from typing import Dict, List
 from dataclasses import dataclass
 
 from model import ActorModel, CriticModel, ReferenceModel
 from reward_model import RewardModel
 from config import PPOConfig
+
+from utils import get_logger, print_model_info
+from tqdm import tqdm
+
+
+logger = get_logger("ppo_training")
 
 
 @dataclass
@@ -175,9 +182,44 @@ def compute_advantages(buffer: RolloutBuffer, config: PPOConfig) -> RolloutBuffe
     TODO: 实现上述步骤
     提示：可以用 torch.flip 把序列反转，方便从后往前循环
     """
-    raise NotImplementedError
-
-
+    rewards = buffer.rewards
+    values = buffer.values  # (B, resp_len)
+    # 下一位 token 的 state value 矩阵
+    next_values = torch.concat(  # (B, resp_len)
+        [values[:, 1:], torch.zeros((values.size(0), 1), dtype=values.dtype, device=values.device)],
+        dim=-1
+    )
+    delta = rewards + config.gamma * next_values - values  # (B, resp_len)
+    
+    T = delta.size(1)
+    advantages = torch.zeros_like(delta)
+    
+    A_t = torch.zeros(delta.size(0), dtype=delta.dtype, device=delta.device)  # (B,)代表A_{t+1}
+    for t in range(T - 1, -1, -1):  # 在resp_len所在维度往前递推
+        A_t = delta[:, t] + config.gamma * config.gae_lambda * A_t
+        advantages[:, t] = A_t
+    
+    # G_t = A_t + V_t
+    returns = advantages + values
+    
+    # 找出response的attention mask
+    prompt_len = buffer.prompt_ids.size(1)
+    response_mask = buffer.attention_mask[:, prompt_len:].to(advantages.dtype)
+    
+    # 计算有效token的均值和方差
+    adv_mean = (advantages * response_mask).sum() / (response_mask.sum() + 1e-8)
+    adv_var = ((advantages - adv_mean) ** 2 * response_mask).sum() / (response_mask.sum() + 1e-8)
+    adv_std = adv_var.sqrt()
+    
+    # 归一化
+    advantages = (advantages - adv_mean) / (adv_std + 1e-8)
+    advantages = advantages * response_mask
+    
+    buffer.advantages = advantages
+    buffer.returns = returns
+    return buffer
+    
+    
 def compute_ppo_loss(actor: ActorModel, critic: CriticModel,
                      buffer: RolloutBuffer, config: PPOConfig):
     """
@@ -186,7 +228,7 @@ def compute_ppo_loss(actor: ActorModel, critic: CriticModel,
     包含三部分损失：
 
     1. Actor Loss（PPO-clip）：
-       r_t = exp(log_probs_new - log_probs_old)     ← 重要性采样比率
+       r_t = exp(new_log_probs - old_log_probs)     ← 重要性采样比率
        L_clip = -mean(min(r_t * A_t, clip(r_t, 1-ε, 1+ε) * A_t))
 
        直觉：
@@ -218,8 +260,45 @@ def compute_ppo_loss(actor: ActorModel, critic: CriticModel,
       - log_probs_new 只取 response 部分（和 old_log_probs 对齐）
       - 注意 mask：只对有效的 response token 计算损失，padding 位置不计算
     """
-    raise NotImplementedError
-
+    prompt_len = buffer.prompt_ids.size(1)
+    prompt_response_ids = torch.concat([buffer.prompt_ids, buffer.response_ids], dim=-1)
+    logits = actor.forward(input_ids=prompt_response_ids,
+                           attention_mask=buffer.attention_mask)[:, prompt_len-1:-1, :]  # (B, resp_len, V)
+    log_probs_full = torch.log_softmax(logits, dim=-1)
+    
+    # new_log_probs：取实际生成 token 的概率
+    labels = buffer.response_ids.unsqueeze(-1)  # (B, resp_len, 1)
+    new_log_probs = log_probs_full.gather(dim=-1, index=labels).squeeze(-1)
+    old_log_probs = buffer.old_log_probs  # (B, resp_len)
+    
+    # 重要性采样比率
+    ratio = (new_log_probs - old_log_probs).exp()  # (B, resp_len)
+    
+    advantages = buffer.advantages  # (B, resp_len)
+    response_mask = buffer.attention_mask[:, prompt_len:].to(new_log_probs.dtype)  # (B, resp_len) 回答部分的mask
+    
+    # Actor Loss（标量）
+    clip_term = torch.min(
+        ratio * advantages,
+        torch.clamp(ratio, 1 - config.clip_eps, 1 + config.clip_eps) * advantages
+    )
+    # 应用掩码之后计算batch中所有有效位置元素的均值
+    L_clip = -(clip_term * response_mask).sum() / ((response_mask).sum() + 1e-8)
+    
+    # Critic loss（标量）
+    V_new = critic(input_ids=prompt_response_ids,
+                   attention_mask=buffer.attention_mask)[:, prompt_len-1:-1]  # (B, resp_len)
+    # 应用掩码后计算batch中所有有效位置均值 L_v = mask_mean(sum((V_t - G_t) ^ 2))
+    L_value = (((V_new - buffer.returns) ** 2) * response_mask).sum() / (response_mask.sum() + 1e-8)
+    
+    # Entropy loss
+    entropy = -(log_probs_full.exp() * log_probs_full).sum(dim=-1)  # (B, resp_len)，对词表维求和
+    L_entropy = -(entropy * response_mask).sum() / (response_mask.sum() +  1e-8)
+    
+    total_loss = L_clip + config.vf_coef * L_value + config.ent_coef * L_entropy
+    
+    return total_loss, L_clip, L_value, L_entropy
+    
 
 def ppo_update(actor: ActorModel, critic: CriticModel,
                actor_optimizer, critic_optimizer,
@@ -243,31 +322,117 @@ def ppo_update(actor: ActorModel, critic: CriticModel,
       - 梯度裁剪：nn.utils.clip_grad_norm_(actor.parameters(), 1.0)
       - 可以用 torch.utils.data.TensorDataset + DataLoader 来做 mini-batch 切分
     """
-    raise NotImplementedError
+    dataset = TensorDataset(
+            buffer.prompt_ids,
+            buffer.response_ids,
+            buffer.attention_mask,
+            buffer.old_log_probs,
+            buffer.advantages,
+            buffer.returns,
+        )
+    dataloader = DataLoader(dataset, batch_size=config.ppo_batch_size, shuffle=True)
+    num_batches = len(dataloader)
+    
+    mean_total_loss, mean_actor_loss, mean_critic_loss, mean_entropy_loss = 0, 0, 0, 0
+    
+    for epoch in range(config.ppo_epochs):
+        for mini_batch in tqdm(dataloader, desc=f"Epoch {epoch+1}"):
+            p_ids, r_ids, mask, old_lp, adv, ret = mini_batch
+            mini_buffer = RolloutBuffer(
+                prompt_ids=p_ids,
+                response_ids=r_ids,
+                attention_mask=mask,
+                old_log_probs=old_lp,
+                ref_log_probs=None,
+                rewards=None,
+                values=None,
+                advantages=adv,
+                returns=ret,
+            )
+            total_loss, L_clip, L_value, L_entropy = compute_ppo_loss(actor, critic, mini_buffer, config)
+
+            # 更新actor
+            actor_optimizer.zero_grad()
+            critic_optimizer.zero_grad()
+            
+            total_loss.backward()
+            
+            torch.nn.utils.clip_grad_norm_(actor.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(critic.parameters(), 1.0)
+            
+            actor_optimizer.step()
+            critic_optimizer.step()
+            
+            mean_total_loss += total_loss.item()
+            mean_actor_loss += L_clip.item()
+            mean_critic_loss += L_value.item()
+            mean_entropy_loss += L_entropy.item()
+            
+        logger.info(f"Epoch {epoch+1}: mean total loss={mean_total_loss / ((epoch+1) * num_batches)} | mean actor loss={mean_actor_loss / ((epoch+1) * num_batches)} | mean critic loss={mean_critic_loss / ((epoch+1) * num_batches)} | mean entropy loss={mean_entropy_loss / ((epoch+1) * num_batches)}")
+    
+    return {
+        "loss/total":   mean_total_loss / (config.ppo_epochs * num_batches),
+        "loss/actor":   mean_actor_loss / (config.ppo_epochs * num_batches),
+        "loss/critic":  mean_critic_loss / (config.ppo_epochs * num_batches),
+        "loss/entropy": mean_entropy_loss / (config.ppo_epochs * num_batches),
+    }
 
 
 if __name__ == "__main__":
+    # ─── 端到端测试：collect_rollouts → compute_advantages → ppo_update ───
     from config import Config
-    from transformers import AutoTokenizer, PreTrainedTokenizer
+    from transformers import AutoTokenizer
+    from torch.optim import AdamW
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     cfg = Config()
-    
-    actor = ActorModel(cfg.model).to('cuda')
-    critic = CriticModel(cfg.model).to('cuda')
-    ref_model = ReferenceModel(cfg.model).to('cuda')
-    reward_model = RewardModel(cfg.reward).to('cuda')
-    
-    tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained('gpt2')
+    # 测试时把规模调小，省显存、跑得快
+    cfg.ppo.max_new_tokens = 16
+    cfg.ppo.ppo_epochs = 2
+    cfg.ppo.ppo_batch_size = 2
+
+    # 1. 初始化四个模型
+    actor = ActorModel(cfg.model).to(device)
+    critic = CriticModel(cfg.model).to(device)
+    ref_model = ReferenceModel(cfg.model).to(device).eval()
+    reward_model = RewardModel(cfg.reward).to(device).eval()
+
+    # 2. 各自的优化器（只有 actor / critic 需要训练）
+    actor_optimizer = AdamW(actor.parameters(), lr=cfg.ppo.actor_lr)
+    critic_optimizer = AdamW(critic.parameters(), lr=cfg.ppo.critic_lr)
+
+    # 3. 准备一小批 prompt（左填充，生成时需要）
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model.model_name)
     tokenizer.pad_token = tokenizer.eos_token
-    test_prompt = "I am a man. Who are you ?"
-    tokenized = tokenizer(test_prompt, padding='max_length', 
-                          max_length=cfg.model.max_length, truncation=True, 
-                          return_tensors='pt')
-    input_ids = tokenized['input_ids'].to('cuda')
-    attention_mask = tokenized['attention_mask'].to('cuda')
-    
-    collect_rollouts(actor, critic, 
-                     ref_model, reward_model, 
-                     input_ids, attention_mask,
-                     cfg, 'cuda')
-    
-    
+    tokenizer.padding_side = 'left'
+    prompts = [
+        "I am a man. Who are you?",
+        "The weather today is",
+        "Tell me a story about",
+        "My favorite food is",
+    ]
+    tokenized = tokenizer(prompts, padding='max_length', max_length=32,
+                          truncation=True, return_tensors='pt')
+    input_ids = tokenized['input_ids'].to(device)
+    attention_mask = tokenized['attention_mask'].to(device)
+
+    # 4. Rollout：生成回复 + 收集数据
+    print("=== collect_rollouts ===")
+    buffer = collect_rollouts(actor, critic, ref_model, reward_model,
+                              input_ids, attention_mask, cfg.ppo, device)
+    print("rewards     :", buffer.rewards.shape)
+    print("values      :", buffer.values.shape)
+    print("old_log_probs:", buffer.old_log_probs.shape)
+
+    # 5. GAE：计算优势和回报
+    print("\n=== compute_advantages ===")
+    buffer = compute_advantages(buffer, cfg.ppo)
+    print("advantages  :", buffer.advantages.shape)
+    print("returns     :", buffer.returns.shape)
+
+    # 6. PPO 更新：多轮迭代更新 actor / critic
+    print("\n=== ppo_update ===")
+    metrics = ppo_update(actor, critic, actor_optimizer, critic_optimizer,
+                         buffer, cfg.ppo)
+    print("\nfinal metrics:", metrics)
+    print("\n✅ PPO 单步流程跑通")

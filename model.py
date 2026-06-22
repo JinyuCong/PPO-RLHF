@@ -100,7 +100,7 @@ class ActorModel(nn.Module):
             attention_mask=attention_mask, 
             max_new_tokens=max_new_tokens,
             do_sample=True,
-            temperature=0.3
+            temperature=1.0
             )
         return output
 

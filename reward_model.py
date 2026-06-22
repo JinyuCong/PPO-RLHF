@@ -150,12 +150,13 @@ def train_reward_model_step(reward_model, optimizer, batch, device):
     chosen_mask = batch['chosen_mask'].to(device)
     rejected_mask = batch['rejected_mask'].to(device)
     
-    loss, accuracy = compute_reward_loss(reward_model, chosen_ids, 
-                                         rejected_ids, chosen_mask, 
-                                         rejected_mask)
-    # print(f"loss={loss.item():.4f}, accuracy={accuracy.item():.4f}")
-    
     optimizer.zero_grad()
+    
+    with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+        loss, accuracy = compute_reward_loss(reward_model, chosen_ids,
+                                             rejected_ids, chosen_mask, 
+                                             rejected_mask)
+    
     loss.backward()
     nn.utils.clip_grad_norm_(reward_model.parameters(), 1.0)
     optimizer.step()
