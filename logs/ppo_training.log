@@ -1,0 +1,47 @@
+[2026-06-23 11:48:09] [INFO] Config loaded:
+[2026-06-23 11:48:09] [INFO]   actor_lr=1e-06
+[2026-06-23 11:48:09] [INFO]   kl_coef=0.1
+[2026-06-23 11:48:09] [INFO]   total_steps=1000
+[2026-06-23 11:48:09] [INFO] Initializing RLHF trainer...
+[2026-06-23 11:48:27] [INFO] Starting PPO RLHF training...
+[2026-06-23 11:48:27] [INFO] Monitor training with: tensorboard --logdir ./logs
+[2026-06-23 11:50:24] [INFO] Config loaded:
+[2026-06-23 11:50:24] [INFO]   actor_lr=1e-06
+[2026-06-23 11:50:24] [INFO]   kl_coef=0.1
+[2026-06-23 11:50:24] [INFO]   total_steps=1000
+[2026-06-23 11:50:24] [INFO] Initializing RLHF trainer...
+[2026-06-23 11:50:41] [INFO] Starting PPO RLHF training...
+[2026-06-23 11:50:41] [INFO] Monitor training with: tensorboard --logdir ./logs
+[2026-06-23 11:57:10] [INFO] Config loaded:
+[2026-06-23 11:57:10] [INFO]   actor_lr=1e-06
+[2026-06-23 11:57:10] [INFO]   kl_coef=0.1
+[2026-06-23 11:57:10] [INFO]   total_steps=1000
+[2026-06-23 11:57:10] [INFO] Initializing RLHF trainer...
+[2026-06-23 11:57:27] [INFO] Starting PPO RLHF training...
+[2026-06-23 11:57:27] [INFO] Monitor training with: tensorboard --logdir ./logs
+[2026-06-23 12:02:29] [INFO] Config loaded:
+[2026-06-23 12:02:29] [INFO]   actor_lr=1e-06
+[2026-06-23 12:02:29] [INFO]   kl_coef=0.1
+[2026-06-23 12:02:29] [INFO]   total_steps=1000
+[2026-06-23 12:02:29] [INFO] Initializing RLHF trainer...
+[2026-06-23 12:02:46] [INFO] Starting PPO RLHF training...
+[2026-06-23 12:02:46] [INFO] Monitor training with: tensorboard --logdir ./logs
+[2026-06-23 12:02:55] [INFO] Epoch 1: mean total loss=nan | mean actor loss=nan | mean critic loss=nan | mean entropy loss=nan
+[2026-06-23 12:03:08] [INFO] Epoch 2: mean total loss=nan | mean actor loss=nan | mean critic loss=nan | mean entropy loss=nan
+[2026-06-23 12:03:23] [INFO] Epoch 3: mean total loss=nan | mean actor loss=nan | mean critic loss=nan | mean entropy loss=nan
+[2026-06-23 12:03:34] [INFO] Epoch 4: mean total loss=nan | mean actor loss=nan | mean critic loss=nan | mean entropy loss=nan
+[2026-06-23 12:06:51] [INFO] Config loaded:
+[2026-06-23 12:06:51] [INFO]   actor_lr=1e-06
+[2026-06-23 12:06:51] [INFO]   kl_coef=0.1
+[2026-06-23 12:06:51] [INFO]   total_steps=1000
+[2026-06-23 12:06:51] [INFO] Initializing RLHF trainer...
+[2026-06-23 12:07:09] [INFO] Starting PPO RLHF training...
+[2026-06-23 12:07:09] [INFO] Monitor training with: tensorboard --logdir ./logs
+[2026-06-23 12:07:25] [INFO] Epoch 1: mean total loss=0.5520325899124146 | mean actor loss=-0.0023119449615478516 | mean critic loss=5.842949151992798 | mean entropy loss=-2.9950368404388428
+[2026-06-23 12:07:45] [INFO] Epoch 2: mean total loss=0.45052799582481384 | mean actor loss=-0.024830956012010574 | mean critic loss=5.0546488761901855 | mean entropy loss=-3.0105942487716675
+[2026-06-23 12:08:04] [INFO] Epoch 3: mean total loss=0.3450320015350978 | mean actor loss=-0.037505527337392174 | mean critic loss=4.127386450767517 | mean entropy loss=-3.0201122760772705
+[2026-06-23 12:08:24] [INFO] Epoch 4: mean total loss=0.2849502060562372 | mean actor loss=-0.04732780996710062 | mean critic loss=3.6251779198646545 | mean entropy loss=-3.0239779353141785
+[2026-06-23 12:09:16] [INFO] Epoch 1: mean total loss=0.16467090509831905 | mean actor loss=-0.008939653635025024 | mean critic loss=2.040603756904602 | mean entropy loss=-3.0449827909469604
+[2026-06-23 12:09:34] [INFO] Epoch 2: mean total loss=0.16828846745193005 | mean actor loss=-0.009999506175518036 | mean critic loss=2.0879224240779877 | mean entropy loss=-3.0504270792007446
+[2026-06-23 12:09:52] [INFO] Epoch 3: mean total loss=0.15448415031035742 | mean actor loss=-0.015672044828534126 | mean critic loss=2.007663309574127 | mean entropy loss=-3.0610139767328897
+[2026-06-23 12:10:11] [INFO] Epoch 4: mean total loss=0.13547410815954208 | mean actor loss=-0.017105407547205687 | mean critic loss=1.8326872289180756 | mean entropy loss=-3.068921208381653

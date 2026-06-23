@@ -21,7 +21,7 @@ import itertools
 
 from config import Config
 from model import ActorModel, CriticModel, ReferenceModel, load_models
-from reward_model import RewardModel
+from reward_model import RewardModel, PretrainedRewardModel
 from data import get_prompt_dataloader, load_prompt_data
 from ppo_trainer import collect_rollouts, compute_advantages, ppo_update
 from utils import set_seed, save_checkpoint, load_checkpoint, get_logger, masked_mean, compute_kl_divergence
@@ -68,10 +68,10 @@ class RLHFTrainer:
         self.ref_model: ReferenceModel = ref_model
 
         # TODO: 加载奖励模型（从 checkpoint 加载，路径在 config.reward.reward_model_save_path）
-        self.reward_model: RewardModel = RewardModel(config.reward).to(self.device)
-        rm_path = os.path.join(config.reward.reward_model_save_path, "reward_model.pt")
-        state_dict = torch.load(rm_path, map_location=self.device)
-        self.reward_model.load_state_dict(state_dict)
+        self.reward_model: PretrainedRewardModel = PretrainedRewardModel(config.reward).to(self.device)
+        # rm_path = os.path.join(config.reward.reward_model_save_path, "reward_model.pt")
+        # state_dict = torch.load(rm_path, map_location=self.device)
+        # self.reward_model.load_state_dict(state_dict)
         self.reward_model.eval()
 
         # TODO: 初始化优化器

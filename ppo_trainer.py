@@ -100,7 +100,8 @@ def collect_rollouts(actor: ActorModel, critic: CriticModel,
     with torch.no_grad():
         # Actor 生成 response，构建完整序列（prompt + response）
         prompt_response_ids = actor.generate(input_ids=prompt_ids, 
-                                             attention_mask=attention_mask)
+                                             attention_mask=attention_mask,
+                                             )
         prompt_len = prompt_ids.size(1)
         response_ids = prompt_response_ids[:, prompt_len:]
         

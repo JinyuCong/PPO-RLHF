@@ -32,7 +32,7 @@ class RewardModelConfig:
     奖励模型通常和 Actor 用同一个 backbone，但最后一层换成输出单个标量
     """
     # TODO: 奖励模型用的预训练 backbone（可以和 ModelConfig.model_name 相同）
-    reward_model_name: str = "gpt2"
+    reward_model_name: str = "Ray2333/gpt2-large-harmless-reward_model"
 
     # TODO: 奖励模型 checkpoint 保存路径
     reward_model_save_path: str = "./checkpoints/reward_model"
@@ -96,7 +96,7 @@ class PPOConfig:
     # KL 惩罚防止 Actor 偏离 SFT 模型太远（RLHF 的关键机制）
     # 总奖励 = reward_model_score - kl_coef * KL(π_new || π_ref)
     # TODO: 通常取 0.01 ~ 0.1，值越大越保守
-    kl_coef: float = 0.05
+    kl_coef: float = 0.1
 
     # --- 训练规模 ---
     # TODO: 总共进行多少轮 PPO 迭代（每轮 = 一次 rollout + 多次更新）

@@ -19,8 +19,54 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoModel
+from transformers import AutoModel, AutoModelForSequenceClassification
 from config import RewardModelConfig
+
+
+class PretrainedRewardModel(nn.Module):
+    """
+    直接加载 HuggingFace 上预训练好的 reward model（无需自己训练）。
+
+    适用：基于 GPT2 词表的 reward model，例如
+      - Ray2333/gpt2-large-harmless-reward_model
+      - Ray2333/gpt2-large-helpful-reward_model
+    这类模型用 GPT2 tokenizer，和你的 actor 共享同一套词表，
+    所以 collect_rollouts 里可以直接把 actor 生成的 token id 喂进来打分，
+    不需要任何 tokenizer 转换。
+
+    对外接口和自训练的 RewardModel 完全一致：
+      forward(input_ids, attention_mask) -> (B,)
+    """
+
+    def __init__(self, config: RewardModelConfig):
+        super().__init__()
+        # AutoModelForSequenceClassification：输出 (B, num_labels) 的 logits
+        # 这类 reward model 是 num_labels=1，logit 本身就是 reward 分数
+        # 注意：GPT2 系列在 bf16 下前向会产生 NaN（激活值离群点），
+        # reward 算出来就是 nan，会污染整个训练。所以这里用 fp32。
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            config.reward_model_name,
+            num_labels=1,
+        )
+        # GPT2 没有 pad_token，SequenceClassification 需要 pad_token_id
+        # 来定位"最后一个有效 token"，否则会取到 padding 位置
+        if self.model.config.pad_token_id is None:
+            self.model.config.pad_token_id = self.model.config.eos_token_id
+
+        # 冻结参数（reward model 在 PPO 阶段不训练）
+        for p in self.model.parameters():
+            p.requires_grad = False
+
+    @torch.no_grad()
+    def forward(self, input_ids, attention_mask=None):
+        """
+        返回每条序列的 reward 分数 (B,)
+
+        注意：传入的 input_ids 必须是 GPT2 词表编码的（actor 生成的），
+        和本 RM 的词表一致，才能正确打分。
+        """
+        out = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        return out.logits.squeeze(-1)  # (B, 1) -> (B,)
 
 
 class RewardModel(nn.Module):
@@ -163,4 +209,19 @@ def train_reward_model_step(reward_model, optimizer, batch, device):
     
     return loss.item(), accuracy.item()
 
-    
+
+# if __name__ == "__main__":
+#     import torch
+#     from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+#     rm_tokenizer = AutoTokenizer.from_pretrained('Ray2333/gpt2-large-harmless-reward_model')
+#     reward_model = AutoModelForSequenceClassification.from_pretrained(
+#                         'Ray2333/gpt2-large-harmless-reward_model',
+#                         num_labels=1, torch_dtype=torch.bfloat16,
+#                         device_map=0,
+#                     )
+#     q, a = "\n\nHuman: I just came out of from jail, any suggestion of my future? \n\nAssistant:", "I'm so happy that you are ou of jail. First of all you can go search a job and intergrate the society."
+#     inputs = rm_tokenizer(q, a, return_tensors='pt', truncation=True)
+#     with torch.no_grad():
+#         reward = reward_model(**(inputs.to(0))).logits[0].cpu().detach().item()
+#         print(reward)

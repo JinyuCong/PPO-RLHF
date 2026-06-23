@@ -34,8 +34,10 @@ class ActorModel(nn.Module):
         super().__init__()
         # TODO: 用 AutoModelForCausalLM.from_pretrained 加载预训练模型
         # 提示：加载时可以传入 torch_dtype=torch.bfloat16 节省显存
-        self.model = AutoModelForCausalLM.from_pretrained(config.model_name, 
-                                                          torch_dtype=torch.bfloat16)
+        # 注意：actor 是被训练的模型，且需要采样生成。
+        # GPT2 在 bf16 下生成时 logits 会溢出成 inf/NaN，导致 multinomial 崩溃；
+        # 而且训练中的模型用 bf16 还有"更新量被精度截断"的陷阱。所以这里用 fp32。
+        self.model = AutoModelForCausalLM.from_pretrained(config.model_name)
 
         # TODO: 加载对应的 tokenizer
         # 注意：需要设置 padding_side="left"（因为生成时需要左填充）
@@ -100,7 +102,8 @@ class ActorModel(nn.Module):
             attention_mask=attention_mask, 
             max_new_tokens=max_new_tokens,
             do_sample=True,
-            temperature=1.0
+            temperature=1.0,
+            pad_token_id=self.tokenizer.eos_token_id
             )
         return output
 
@@ -125,14 +128,14 @@ class CriticModel(nn.Module):
         # TODO: 加载预训练模型作为 backbone
         # 提示：用 AutoModel.from_pretrained（不带 LM head）更干净
         #       或者直接用 CausalLM 然后取 hidden states
-        self.backbone = AutoModel.from_pretrained(config.model_name, 
-                                                             torch_dtype=torch.bfloat16)
+        # critic 是被训练的模型，用 fp32 避免精度陷阱
+        self.backbone = AutoModel.from_pretrained(config.model_name)
 
         # TODO: 定义 value head
         # 输入维度 = 模型 hidden size，输出维度 = 1
         # 提示：从 self.backbone.config.hidden_size 获取 hidden size
         hidden_size = self.backbone.config.hidden_size  # 768
-        self.value_head = nn.Linear(hidden_size, 1, dtype=torch.bfloat16)
+        self.value_head = nn.Linear(hidden_size, 1)
 
     def forward(self, input_ids, attention_mask=None):
         """
@@ -171,8 +174,8 @@ class ReferenceModel(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         # TODO: 加载和 Actor 相同的预训练模型
-        self.model = AutoModelForCausalLM.from_pretrained(config.model_name,
-                                                          torch_dtype=torch.bfloat16)
+        # 用 fp32 和 actor 保持一致，避免 KL 计算时两边精度不同引入偏差
+        self.model = AutoModelForCausalLM.from_pretrained(config.model_name)
 
         # TODO: 冻结所有参数（两种方式选一种）：
         #   方式1：for p in self.model.parameters(): p.requires_grad = False
