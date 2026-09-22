@@ -24,7 +24,7 @@ Phase 3: PPO Reinforcement Learning —— train_ppo.py
 
 total reward:
 
-$R = \mathbb{E}_{y \sim \pi_\theta(y|x)}[r(x, y)] - \beta \cdot \mathbb{D}_{KL}[\pi_{\theta}(y|x) || \pi_{ref}(y|x)]$
+$$R = \mathbb{E}_{y \sim \pi_\theta(y|x)}[r(x, y)] - \beta \cdot \mathbb{D}_{KL}[\pi_{\theta}(y|x) || \pi_{ref}(y|x)]$$
 
 ---
 
