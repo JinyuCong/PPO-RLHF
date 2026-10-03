@@ -50,7 +50,7 @@ def main():
     # ─── 5. 训练结束，保存最终模型 ───────────────────────────────────────────
     logger.info("Training complete. Saving final model...")
     trainer.save()
-    logger.info(f"Final model saved to {config.training.output_dir}")
+    logger.info(f"Final model saved to {trainer.output_dir}")
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
 from config import ModelConfig
+from utils import make_position_ids
 
 
 class ActorModel(nn.Module):
@@ -61,7 +62,8 @@ class ActorModel(nn.Module):
         TODO: 直接调用 self.model(input_ids, attention_mask=attention_mask)
               返回 output.logits
         """
-        output = self.model(input_ids, attention_mask=attention_mask)
+        position_ids = make_position_ids(attention_mask) if attention_mask is not None else None
+        output = self.model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
         return output.logits  # (B, S, V)
 
     def get_log_probs(self, input_ids, attention_mask=None):
@@ -103,6 +105,8 @@ class ActorModel(nn.Module):
             max_new_tokens=max_new_tokens,
             do_sample=True,
             temperature=1.0,
+            top_k=0,  # gpt2 默认 top_k=50，会让采样分布和 get_log_probs 算的完整分布不一致
+            top_p=1.0,
             pad_token_id=self.tokenizer.eos_token_id
             )
         return output
@@ -153,8 +157,10 @@ class CriticModel(nn.Module):
         提示：需要在 backbone 调用时设置 output_hidden_states=True
               取最后一层 hidden state
         """
+        position_ids = make_position_ids(attention_mask) if attention_mask is not None else None
         output = self.backbone(input_ids, 
                                attention_mask=attention_mask,
+                               position_ids=position_ids,
                                output_hidden_states=True)
         last_hidden = output.hidden_states[-1]  # (B, S, H)
         return self.value_head(last_hidden).squeeze(-1)  # (B, S)
@@ -193,8 +199,9 @@ class ReferenceModel(nn.Module):
 
         TODO: 复用 ActorModel.get_log_probs 的逻辑
         """
-        model_out = self.model(input_ids, attention_mask=attention_mask)
-        logits = model_out.logits  # (B, S-1, V)
+        position_ids = make_position_ids(attention_mask) if attention_mask is not None else None
+        model_out = self.model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
+        logits = model_out.logits[:, :-1]  # (B, S-1, V)
         log_probs = torch.log_softmax(logits, dim=-1)  # (B, S-1, V)
         labels = input_ids[:, 1:].unsqueeze(-1)  # (B, S-1, 1)
         p_token = log_probs.gather(dim=-1, index=labels).squeeze(-1)  # (B, S-1)

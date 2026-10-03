@@ -21,7 +21,7 @@
 import torch
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
-from typing import Dict, List
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 
 from model import ActorModel, CriticModel, ReferenceModel
@@ -65,8 +65,9 @@ class RolloutBuffer:
     ref_log_probs: torch.Tensor
     rewards: torch.Tensor
     values: torch.Tensor
-    advantages: torch.Tensor = None  # 在 compute_advantages 后填充
-    returns: torch.Tensor = None     # 在 compute_advantages 后填充
+    advantages: Optional[torch.Tensor] = None  # 在 compute_advantages 后填充
+    returns: Optional[torch.Tensor] = None     # 在 compute_advantages 后填充
+    rm_scores: Optional[torch.Tensor] = None   # (batch,) 奖励模型原始打分（不含 KL 惩罚），仅用于日志
 
 
 def collect_rollouts(actor: ActorModel, critic: CriticModel,
@@ -145,6 +146,7 @@ def collect_rollouts(actor: ActorModel, critic: CriticModel,
             ref_log_probs=ref_log_probs.to(device),
             rewards=per_token_reward.to(device),
             values=values.to(device),
+            rm_scores=reward.to(device),
         )
         
     
@@ -298,7 +300,15 @@ def compute_ppo_loss(actor: ActorModel, critic: CriticModel,
     
     total_loss = L_clip + config.vf_coef * L_value + config.ent_coef * L_entropy
     
-    return total_loss, L_clip, L_value, L_entropy
+    # 监控指标（不参与反向传播）：
+    #   clip_frac：ratio 落在 [1-ε, 1+ε] 之外的 token 比例
+    #   approx_kl：新旧策略之间的近似 KL，k3 估计 (r - 1) - log r
+    with torch.no_grad():
+        clip_frac = (((ratio - 1).abs() > config.clip_eps).to(response_mask.dtype) * response_mask).sum() / (response_mask.sum() + 1e-8)
+        log_ratio = new_log_probs - old_log_probs
+        approx_kl = (((ratio - 1) - log_ratio) * response_mask).sum() / (response_mask.sum() + 1e-8)
+    
+    return total_loss, L_clip, L_value, L_entropy, clip_frac, approx_kl
     
 
 def ppo_update(actor: ActorModel, critic: CriticModel,
@@ -335,6 +345,7 @@ def ppo_update(actor: ActorModel, critic: CriticModel,
     num_batches = len(dataloader)
     
     mean_total_loss, mean_actor_loss, mean_critic_loss, mean_entropy_loss = 0, 0, 0, 0
+    mean_clip_frac, mean_approx_kl = 0, 0
     
     for epoch in range(config.ppo_epochs):
         for mini_batch in tqdm(dataloader, desc=f"Epoch {epoch+1}"):
@@ -350,7 +361,7 @@ def ppo_update(actor: ActorModel, critic: CriticModel,
                 advantages=adv,
                 returns=ret,
             )
-            total_loss, L_clip, L_value, L_entropy = compute_ppo_loss(actor, critic, mini_buffer, config)
+            total_loss, L_clip, L_value, L_entropy, clip_frac, approx_kl = compute_ppo_loss(actor, critic, mini_buffer, config)
 
             # 更新actor
             actor_optimizer.zero_grad()
@@ -368,6 +379,8 @@ def ppo_update(actor: ActorModel, critic: CriticModel,
             mean_actor_loss += L_clip.item()
             mean_critic_loss += L_value.item()
             mean_entropy_loss += L_entropy.item()
+            mean_clip_frac += clip_frac.item()
+            mean_approx_kl += approx_kl.item()
             
         logger.info(f"Epoch {epoch+1}: mean total loss={mean_total_loss / ((epoch+1) * num_batches)} | mean actor loss={mean_actor_loss / ((epoch+1) * num_batches)} | mean critic loss={mean_critic_loss / ((epoch+1) * num_batches)} | mean entropy loss={mean_entropy_loss / ((epoch+1) * num_batches)}")
     
@@ -376,6 +389,8 @@ def ppo_update(actor: ActorModel, critic: CriticModel,
         "loss/actor":   mean_actor_loss / (config.ppo_epochs * num_batches),
         "loss/critic":  mean_critic_loss / (config.ppo_epochs * num_batches),
         "loss/entropy": mean_entropy_loss / (config.ppo_epochs * num_batches),
+        "policy/clip_frac": mean_clip_frac / (config.ppo_epochs * num_batches),
+        "policy/approx_kl": mean_approx_kl / (config.ppo_epochs * num_batches),
     }
 
 

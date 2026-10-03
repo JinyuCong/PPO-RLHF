@@ -91,6 +91,9 @@ class RLHFTrainer:
         # TODO: 初始化 TensorBoard writer
         timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         self.writer: Optional[SummaryWriter] = SummaryWriter(f"runs/{timestamp}")
+        # checkpoint 也按 run 分目录（和 runs/ 用同一个时间戳），避免覆盖旧实验的文件。
+        # Windows 上旧的 model.safetensors 如果被其他进程以 mmap 方式打开，覆盖会报 OSError 1224
+        self.output_dir = os.path.join(config.training.output_dir, timestamp)
 
         # 训练步数计数器
         self.global_step = 0
@@ -182,8 +185,26 @@ class RLHFTrainer:
         kl = compute_kl_divergence(old_log_probs, ref_log_probs, response_mask)  # (B,)
         avg_kl = kl.mean()
         
+        # 奖励模型原始打分（不含 KL 惩罚、不被长度稀释），这才是"奖励有没有涨"的主指标
+        rm_scores = buffer.rm_scores.float()
+        
+        # Critic 的 explained variance：1 - Var(G - V) / Var(G)，越接近 1 说明价值估计越准
+        values = buffer.values
+        returns = buffer.returns
+        ret_mean = masked_mean(returns, response_mask)
+        ret_var = masked_mean((returns - ret_mean) ** 2, response_mask)
+        err = returns - values
+        err_mean = masked_mean(err, response_mask)
+        err_var = masked_mean((err - err_mean) ** 2, response_mask)
+        explained_var = 1 - err_var / (ret_var + 1e-8)
+        
         metrics["reward/mean"] = avg_reward.item()
+        metrics["reward/rm_score"] = rm_scores.mean().item()
+        metrics["reward/rm_score_std"] = rm_scores.std().item()
         metrics["kl/mean"] = avg_kl.item()
+        metrics["policy/entropy"] = -metrics["loss/entropy"]
+        metrics["critic/explained_var"] = explained_var.item()
+        metrics["response/length"] = response_mask.sum(dim=-1).mean().item()
         
         return metrics
 
@@ -227,7 +248,7 @@ class RLHFTrainer:
               actor.model.save_pretrained(path) 可以保存为 HuggingFace 格式
         """
         save_checkpoint(
-            save_dir=self.config.training.output_dir,
+            save_dir=self.output_dir,
             step=self.global_step,
             actor=self.actor,
             critic=self.critic,

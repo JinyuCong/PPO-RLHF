@@ -90,7 +90,7 @@ class PPOConfig:
 
     # 熵正则化系数：鼓励探索，防止策略过早收敛
     # TODO: 通常取 0.01，值越大越鼓励随机性
-    ent_coef: float = 0.01
+    ent_coef: float = 0
 
     # --- KL 散度惩罚 ---
     # KL 惩罚防止 Actor 偏离 SFT 模型太远（RLHF 的关键机制）
@@ -100,7 +100,7 @@ class PPOConfig:
 
     # --- 训练规模 ---
     # TODO: 总共进行多少轮 PPO 迭代（每轮 = 一次 rollout + 多次更新）
-    total_steps: int = 1000
+    total_steps: int = 200
 
     # TODO: 每次 rollout 生成多少条回复
     rollout_batch_size: int = 16

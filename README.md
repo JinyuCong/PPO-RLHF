@@ -146,14 +146,20 @@ Key metrics:
 
 ---
 
+## Training results
+
+![Rewards vs. KL](./figures/reward_vs_kl.png)
+
+![Training plots](figures\training_dashboard.png)
+
+---
+
 ## Training Order Cheat Sheet
 
-```
+```text
 Pre-trained GPT-2 (off the shelf)
       │
       ├─ Method A: HF pre-trained RM ──┐
       │                                ├──► python train_ppo.py ──► Aligned Actor
       └─ Method B: train_reward.py ────┘
 ```
-
-

@@ -12,6 +12,19 @@ import torch
 from typing import Dict, Any
 
 
+def make_position_ids(attention_mask: torch.Tensor) -> torch.Tensor:
+    """
+    根据 attention_mask 计算 position_ids，让左填充的序列也从位置 0 开始编号
+
+    GPT-2 是绝对位置编码，forward 时不传 position_ids 会默认用 0..S-1，
+    左填充后真实 token 的位置就整体偏移了，和 generate()（内部会按 mask 算位置）对不上。
+
+      mask:         [0, 0, 1, 1, 1]
+      position_ids: [0, 0, 0, 1, 2]   ← padding 位置随便填 0，反正被 mask 掉
+    """
+    return (attention_mask.long().cumsum(dim=-1) - 1).clamp(min=0)
+
+
 def set_seed(seed: int):
     """
     固定所有随机种子，保证实验可复现

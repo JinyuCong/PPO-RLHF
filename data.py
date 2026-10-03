@@ -144,9 +144,10 @@ class PromptDataset(Dataset):
         TODO: 实现上述步骤
         """
         prompt = self.prompts[idx]
+        # 不在这里 padding：交给 collate_fn 按 batch 内最长的 prompt 左填充，省显存也省时间
         tokenized_prompt = self.tokenizer(prompt, return_tensors='pt',
                                           max_length=self.max_length,
-                                          truncation=True, padding='max_length')
+                                          truncation=True)
         
         return {
             "input_ids": tokenized_prompt['input_ids'].squeeze(0),
@@ -250,8 +251,21 @@ def get_prompt_dataloader(prompts: List[str], tokenizer, max_length: int,
 
     TODO: 同上，用 PromptDataset 和 DataLoader
     """
+    # hh-rlhf 的 prompt 以 "Assistant:" 结尾，超长时从左边截断，保留最后几轮对话
+    tokenizer.truncation_side = 'left'
     prompt_ds = PromptDataset(prompts, tokenizer=tokenizer, max_length=max_length)
-    prompt_dl = DataLoader(prompt_ds, batch_size=batch_size, shuffle=shuffle)
+
+    def collate_fn(batch):
+        # 动态左填充到 batch 内最长长度
+        padded = tokenizer.pad(
+            {"input_ids": [b["input_ids"] for b in batch],
+             "attention_mask": [b["attention_mask"] for b in batch]},
+            padding=True, return_tensors='pt'
+        )
+        padded["prompt_text"] = [b["prompt_text"] for b in batch]
+        return padded
+
+    prompt_dl = DataLoader(prompt_ds, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn)
     return prompt_dl
 
 

@@ -21,6 +21,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModel, AutoModelForSequenceClassification
 from config import RewardModelConfig
+from utils import make_position_ids
 
 
 class PretrainedRewardModel(nn.Module):
@@ -65,7 +66,8 @@ class PretrainedRewardModel(nn.Module):
         注意：传入的 input_ids 必须是 GPT2 词表编码的（actor 生成的），
         和本 RM 的词表一致，才能正确打分。
         """
-        out = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        position_ids = make_position_ids(attention_mask) if attention_mask is not None else None
+        out = self.model(input_ids=input_ids, attention_mask=attention_mask, position_ids=position_ids)
         return out.logits.squeeze(-1)  # (B, 1) -> (B,)
 
 
