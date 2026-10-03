@@ -150,7 +150,7 @@ Key metrics:
 
 ![Rewards vs. KL](./figures/reward_vs_kl.png)
 
-![Training plots](figures\training_dashboard.png)
+![Training plots](./figures/training_dashboard.png)
 
 ---
 
